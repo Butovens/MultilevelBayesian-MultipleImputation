@@ -17,4 +17,5 @@ The variables are:
 * **POST_V**: Visual cortex posttest stimulation condition
 * **PRE_LC**: Left Cerebellum pretest stimulation condition
 * **POST_LC**: Left Cerebellum posttest stimulation condition
+* **Interval**: Musical interval to be sung relative to participants' comfort pitch
 
