@@ -1,6 +1,6 @@
 # Multilevel Bayesian analysis combined with Multiple Imputation
 
-This data set comes from a singing experiment. One of the tasks (analyzed here) had participants vocally imitate a 4-tone melody, six times. In total there were three ascending melodies and three descending ones and the melodies were
+This data set comes from a neuroscience singing experiment. The experiment was to determine which (selected) brain region contributed to one's ability to sing accurately. One of the tasks (analyzed here) had participants vocally imitate a 4-tone melody, six times. In total there were three ascending melodies and three descending ones and the melodies were)
 randomized. The singing task gave a score for each note sung in a melody. For instance, after singing back the a 4-note melody, participants would get 4 scores (one for each note of the melody sung). These scores are signed pitch-deviation scores that are computed by subtracting the value of the sung pitch from the value of the imitated target pitch 
 (i.e. score = sung pitch – target pitch). The closer to zero the value is, the more accurate the pitch sung is (relative to the target pitch). The unit of the score is CENT which is a logarithmic unit of measure used for musical interval. It measures the ratio between two frequencies.
 
