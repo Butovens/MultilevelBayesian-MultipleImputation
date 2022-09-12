@@ -4,7 +4,7 @@ This data set comes from a singing experiment. One of the tasks (analyzed here) 
 randomized. The singing task gave a score for each note sung in a melody. For instance, after singing back the a 4-note melody, participants would get 4 scores (one for each note of the melody sung). These scores are signed pitch-deviation scores that are computed by subtracting the value of the sung pitch from the value of the imitated target pitch 
 (i.e. score = sung pitch – target pitch). The closer to zero the value is, the more accurate the pitch sung is (relative to the target pitch). The unit of the score is CENT which is a logarithmic unit of measure used for musical interval. It measures the ratio between two frequencies.
 
-The design of this experiment was a pretest-posttest with four different conditions (i.e. sham/placebo brain simulation, visual cortex brain simulation , left cerebellum brain simulation , right cerebellum brain simulation). Participants did the singing test once before brain stimulation and once after brain stimulation.
+The design of this experiment was a pretest-posttest within subject design with four different conditions (i.e. sham/placebo brain simulation, visual cortex brain simulation , left cerebellum brain simulation , right cerebellum brain simulation). Participants did the singing test once before brain stimulation and once after brain stimulation.
 
 The variables are:
 
