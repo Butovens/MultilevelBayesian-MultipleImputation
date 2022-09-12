@@ -1,0 +1,528 @@
+---
+title: "Multilevel Bayesian analysis with multiple imputation"
+author: "Butovens Médé"
+date: "3/30/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# install.packages("tidyverse", "skimr", "mice", "brms", "dplyr", "VIM", "naniar", "performance", "see", "qqplotr", "randomforest", "bayesplot")
+library(tidyverse)
+library(skimr)
+library(mice)
+library(brms)
+library(dplyr)
+library(VIM)
+library(naniar)
+library(performance)
+library(see)
+library(qqplotr)
+library(randomForest)
+library(bayesplot)
+```
+
+
+### Import data
+```{r}
+# Import data
+SSAP <- read_csv(file.choose()) # choose SSAP_melody_data.csv file
+
+# Look at data
+skim(SSAP)
+
+# change names
+SSAP <- rename(SSAP, ID = `Imitation 3`)
+
+# Look at missing data pattern
+# md.pattern(SSAP)
+SSAP %>% aggr()
+SSAP %>% filter(ID != "MBUCM_13") %>% aggr()
+```
+
+
+### Look at missing data pattern
+```{r}
+# Look at missing data pattern
+S_pivot_filt %>% naniar::vis_miss()
+SSAP %>% filter(ID != "MBUCM_13") %>% naniar::vis_miss()
+
+aggr_plot <- aggr(SSAP_pivot, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(SSAP_pivot), cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern"))
+```
+
+### Add covariates to data set
+```{r}
+### Add gender column to data set
+SSAP <- SSAP %>% 
+  mutate(Gender = case_when(str_detect(ID, pattern = "_T1") ~ "M",
+                            str_detect(ID, pattern = "_10") ~ "M",
+                            str_detect(ID, pattern = "_12") ~ "M",
+                            TRUE ~ "F"))
+
+
+### Add age for each participant
+SSAP <- SSAP %>% 
+  mutate(Age = case_when(str_detect(ID, pattern = "T1") ~ 34,
+                         str_detect(ID, pattern = "T2") ~ 23,
+                         str_detect(ID, pattern = "02") ~ 18,
+                         str_detect(ID, pattern = "03") ~ 19,
+                         str_detect(ID, pattern = "04") ~ 20,
+                         str_detect(ID, pattern = "10") ~ 18,
+                         str_detect(ID, pattern = "11") ~ 20,
+                         str_detect(ID, pattern = "12") ~ 23,
+                         str_detect(ID, pattern = "13") ~ 19,
+                         TRUE ~ 22))
+
+
+### Add last practiced age for each participant
+SSAP <- SSAP %>% 
+  mutate(Last_practiced = case_when(str_detect(ID, pattern = "T1") ~ 13,
+                         str_detect(ID, pattern = "T2") ~ 20,
+                         str_detect(ID, pattern = "02") ~ 14,
+                         str_detect(ID, pattern = "03") ~ 17,
+                         str_detect(ID, pattern = "04") ~ 12,
+                         str_detect(ID, pattern = "07") ~ 19,
+                         str_detect(ID, pattern = "10") ~ 18,
+                         str_detect(ID, pattern = "11") ~ 12,
+                         str_detect(ID, pattern = "12") ~ 8,
+                         str_detect(ID, pattern = "13") ~ 12, 
+                         TRUE ~ 17))
+
+#### Add number of years since last practice
+SSAP <- SSAP %>% 
+  mutate(Since_last = Age - Last_practiced)
+
+
+### Test for MCAR: little's test
+SSAP  %>% select(!Last_practiced) %>%  mcar_test() # Remove Last practiced column from analysis because it is perfectly correlated with Age and Since Last, thus causing error in the evaluation of the MCAR
+
+### Change ID, Gender to factor
+SSAP <- SSAP %>% 
+  mutate(ID = factor(ID),
+        # Gender = factor(Gender),
+         Interval = factor(Interval))
+
+### Contrasts Gender
+SSAP$Gender %>% contrasts()
+
+### Create missingness indicator for all the variables with missing data
+r_SSAP <- SSAP %>% mutate(r_prS = if_else(is.na(PRE_S),1,0 ),
+                        r_poS = if_else(is.na(POST_S),1,0 ),
+                        r_prV = if_else(is.na(PRE_V),1,0 ),
+                        r_poV = if_else(is.na(POST_V),1,0 ),
+                        r_prLC = if_else(is.na(PRE_LC),1,0 ),
+                        r_poLC = if_else(is.na(POST_LC),1,0 ),
+                        r_prRC = if_else(is.na(PRE_RC),1,0 ),
+                        r_poRC = if_else(is.na(POST_RC),1,0 ))
+```
+
+
+### Change data layout for analysis
+```{r}
+
+### Pivot column
+SSAP_pivot <- SSAP %>% 
+  pivot_longer(cols = PRE_S:POST_LC,
+               names_to = "Condition",
+               values_to = "Values") %>% 
+  mutate(Post = if_else(str_detect(Condition, pattern = "POST"), "POST", "PRE"),
+         Condition = case_when(str_detect(Condition, pattern = "_S") ~ "Sham",
+                               str_detect(Condition, pattern = "_V") ~ "Visual",
+                               str_detect(Condition, pattern = "_RC") ~ "RCereblm",
+                               TRUE ~ "LCereblm"))
+skim(SSAP_pivot)
+### Transform Condition as factor
+SSAP_pivot <- SSAP_pivot %>% 
+  mutate(Condition = factor(Condition),
+         Post = factor(Post))
+
+### Check contrasts for Condition (remember to change to the desired contrast)
+SSAP_pivot$Condition %>% contrasts()
+SSAP_pivot$Post %>% contrasts()
+SSAP_pivot$Gender %>% contrasts()
+
+### Change contrasts coding
+contrasts(SSAP_pivot$Condition) <- cbind(c(1, 0, 0, 0),
+                                        c(0, 1, 0, 0),
+                                        c(0, 0, 0, 1))
+contrasts(SSAP_pivot$Gender) <- c(-0.5, 0.5)
+contrasts(SSAP_pivot$Post) <- c(1, 0)
+
+### Mean center continuous variables
+SSAP_pivot <- SSAP_pivot %>% 
+  mutate(Age_c = scale(x = Age, center = T, scale = F),
+          Last_practiced_c = scale(x = Last_practiced, center = T, scale = F),
+          Values_c = scale(x = Values, center = T, scale = F))
+
+
+
+
+### MIssing data pattern after data wrangling
+SSAP_pivot %>% aggr()
+SSAP_pivot %>% naniar::vis_miss()
+ggsave("missing.png")
+SSAP_pivot %>% prop_miss()
+```
+
+
+### Try different models before imputation
+```{r}
+
+### Check normality assumption
+mod <- brm(Values ~ Condition * Post + Age  + Since_last + Gender + (1 + Condition + Post | ID),
+           sample_prior = TRUE,
+           data = SSAP_pivot)
+
+mod.1 <- brm(Values ~ Condition * Post + Age  + Since_last + (1 + Condition | ID),
+                  data = SSAP_pivot)
+
+mod.2 <- brm(Values ~ Condition * Post + Age  + Since_last + (1 + Post | ID),
+                  data = SSAP_pivot)
+
+mod1 <- lme4::lmer(Values ~ Condition + Post + (1 + Condition | ID),
+                  data = S_pivot_filt)
+
+mod2 <- lme4::lmer(Values ~ Condition * Post + (1 + Condition + Post | ID),
+                  data = S_pivot_filt)
+
+lm1 <- lm(Values ~ Condition + Post + Age  + Since_last + Gender,
+                  data = S_pivot_filt)
+### Create data set wihout participants 13 who have most of its missing values
+S_pivot_filt <- SSAP_pivot %>% 
+  filter(ID != "BMUCM_13")
+
+### Check some of the models created
+summary(mod1)
+model_performance(mod1)
+check_convergence(mod.2)
+check_collinearity(mod.2)
+check_normality(mod.2)
+check_outliers(mod.2)
+
+
+### Look at potential distribution to be used with the model
+check_distribution(mod.2)
+
+### Compare models
+comp <- compare_performance(lm, lm1)
+comp
+```
+
+
+### Plot historgram for deviation scores
+```{r}
+
+### plot histogram of Values for all 4 conditions Pre and Post mixed together
+ggplot(SSAP_pivot %>% filter(Condition == "LCereblm")) +
+  geom_histogram( aes(x = Values), bins = 100) +
+  geom_histogram(data = SSAP_pivot %>% filter(Condition == "Sham"),
+                 aes(x = Values), bins = 100,
+                 color = "blue",
+                 alpha = 0.5) +
+  geom_histogram(data = SSAP_pivot %>% filter(Condition == "Visual"),
+                 aes(x = Values),
+                 bins = 100,
+                 color = "red",
+                 alpha = 0.25) +
+  geom_histogram(data = SSAP_pivot %>% filter(Condition == "RCereblm"),
+                 aes(x = Values),
+                 bins = 100,
+                 color = "green",
+                 alpha = 0.1)
+  
+### Example plot difference betweem Pre adn post
+ggplot(SSAP_pivot %>% filter(Condition == "Sham" & Post == "PRE")) +
+  geom_histogram( aes(x = Values), bins = 100) +
+  geom_histogram( data = SSAP_pivot %>% filter(Condition == "Sham" & Post == "POST"),
+                  aes(x = Values), bins = 100, 
+                  color = "red",
+                  alpha = 0.5) 
+
+```
+#### Other plots
+```{r}
+
+#### Plot per participant pretest
+  ggplot(SSAP_pivot %>% 
+           filter(Post == "PRE"), aes(x = Condition,
+                            y = abs(Values),
+                            color = Condition)) +
+    geom_point(position = position_jitter()) +
+    facet_wrap(~ ID) +
+    # geom_smooth(method = "lm") +
+    # stat_summary(fun = "mean", colour = "red", size = 2, geom = "point") +
+      labs(title = "Absolute values of pitch-to-target difference for each condition per participants",
+           subtitle = "Pretest (Melody Imitation)",
+         x = "Conditions",
+         y = "Absolute values of pitch-to-target difference") +
+    theme_bw() +
+    theme(text=element_text(size = 10)) +
+ scale_x_discrete(labels = c("LCereblm" = "LC", "RCereblm" = "RC", "Sham" = "S", "Visual" = "V")) +
+ scale_y_continuous(limits = c(0, 300))
+
+#### Plot per participant posttest
+  ggplot(SSAP_pivot %>% 
+           filter(Post == "POST"), aes(x = Condition,
+                            y = abs(Values),
+                            color = Condition)) +
+    geom_point(position = position_jitter()) +
+    facet_wrap(~ ID) +
+    # geom_smooth(method = "lm") +
+    # stat_summary(fun = "mean", colour = "red", size = 2, geom = "point") +
+      labs(title = "Absolute values of pitch-to-target difference for each condition per participants",
+           subtitle = "Posttest (Melody Imitation)",
+         x = "Conditions",
+         y = "Absolute values of pitch-to-target difference") +
+    theme_bw() +
+    theme(text=element_text(size = 10)) +
+ scale_x_discrete(labels = c("LCereblm" = "LC", "RCereblm" = "RC", "Sham" = "S", "Visual" = "V")) +
+ scale_y_continuous(limits = c(0, 300))
+
+#### Pre vs Post
+ggplot(data = SSAP_pivot,
+       mapping = aes(x = Condition,
+                     y = abs(Values),
+                     color = Condition)) +
+  geom_point(position = position_jitter()) +
+  facet_wrap(~ Post) +
+  stat_summary(fun = "mean", colour = "red", size = 2, geom = "point") +
+    labs(title = "Absolute values of pitch-to-target difference for each condition in melody imitation",
+       x = "Conditions",
+       y = "Absolute values of pitch-to-target difference") +
+  theme_bw() +
+  theme(text=element_text(size = 10)) 
+
+
+#### Dot and whiskers plot Pre vs Post
+ggplot(SSAP_pivot) +
+  stat_summary(aes(x = Condition,
+                   y = abs(Values)),
+                   fun.data = "mean_cl_boot", geom = "pointrange") +
+      facet_wrap(~ Post) +
+    # geom_point(aes(x = Condition,
+    #                y = abs(Values), color = Condition),
+    #            position = position_jitter(),
+    #            alpha = 0.5) +
+   labs(title = "Mean absolute value and sd of pitch-to-target difference for each condition 
+        \ in melody imitation",
+        subtitle = "Pre and Post test",
+       x = "Conditions",
+       y = "Absolute values of pitch-to-target difference") +
+  theme_bw() +
+  theme(text=element_text(size = 12))
+```
+
+
+
+### Transform data for Mplus to try to find auxiliary variables for the model
+```{r}
+### Create missingness indicator for variable having missing data
+SSAP_MPlus <- SSAP_pivot %>% mutate(R_Values = if_else(is.na(Values),1,0 ))
+
+### Change categorical variables to number for Mplus.
+SSAP_MPlus <- SSAP_MPlus %>% mutate(Gender = if_else(str_detect(Gender, pattern = "M"), 1, 0),
+                      Post = if_else(str_detect(Post, pattern = "POST"), 1, 0),
+                      Condition = case_when(str_detect(Condition, pattern = "Sham") ~ 0,
+                                            str_detect(Condition, pattern = "RCereblm") ~ 1,
+                                            str_detect(Condition, pattern = "LCereblm") ~ 2,
+                                            TRUE ~ 3))
+
+### Transform NA data to -99 for Mplus format
+SSAP_MPlus <- SSAP_MPlus %>% 
+  mutate(across(everything(),
+                ~replace_na(.x, -99))) %>% 
+  select(!ID & !Last_practiced)
+
+#### Save as csv file for Mplus
+write_csv(SSAP_MPlus, file = "SSAP_MPlus.csv",col_names = F, append = F)
+```
+
+### Start multiple imputation process
+
+* Used [this tutorial](https://bookdown.org/marklhc/notes_bookdown/missing-data.html) for missing data
+```{r}
+### Create missing indicator value for missing data in Values
+SSAP_pivot_R <- transform(SSAP_pivot,
+                          Values_R = factor(as.numeric(!is.na(Values)),
+                                            labels = c("missing",
+                                                       "observed")))
+# ### Plot 
+#  ggplot(SSAP_pivot_R) +
+#    geom_col(aes(x = Values_R, y = Condition, file = Condition))
+
+
+### Look at the default setting
+ImpSSAP <- mice(SSAP_pivot, m = 1, print = F)
+meth <- ImpSSAP$meth # Check Imputation method and save it if happy with it (Default is pmm: Predictive mean matching)
+pred <- ImpSSAP$pred # Check predictor matrix and save it 
+
+
+### Set variables that have no predictive power (e.g. ID) to zero in predictor matrix
+pred[ ,"ID"] <- 0 # Set column ID to zero
+pred[, "Gender"] <-  0 # Set column Gender to zero
+
+### Step 1: Imputation 
+ImpSSAP_new <- mice(SSAP_pivot, m = 20, method = meth, pred = pred, print = F, maxit = 50, seed = 29002)
+ 
+### Print trace plot to check for convergence
+
+png("myplot.png")
+myplot <- plot(ImpSSAP_new)
+print(myplot)
+dev.off()
+
+## Plot real data against imputed data
+png("myplot2.png")
+myplot2 <- stripplot(ImpSSAP_new, Values ~.imp, pch=20, cex=2)
+print(myplot2)
+dev.off()
+
+### Base version with other variables
+stripplot(ImpSSAP_new)
+### Other way to plot if have multiple variables with missing data
+# xyplot(tempData,Ozone ~ Wind+Temp+Solar.R,pch=18,cex=1)
+
+### Plot density plot
+png("ppcheck2.png")
+ppcheck2 <- densityplot(ImpSSAP_new)
+print(ppcheck2)
+dev.off()
+### Check imputed data set
+complete(ImpSSAP_new, "long") %>% head()
+
+#### Get prior
+get_prior(Values ~ 1 + Condition + Post + Condition:Post + (1 + Condition + Post|ID) + (1 | Interval), # might need to specify combine = TRUE so that the brmsfit_multiple object, which inherits from class brmsfit and behaves essentially the same as brmsfit object.
+                            data = ImpSSAP_new)
+
+### Fit the bayesion model
+m1_SSAP_imp <- brm_multiple(Values ~ 1 + Condition + Post + Condition:Post + (1 + Condition + Post|ID) + (1 | Interval), # might need to specify combine = TRUE so that the brmsfit_multiple object, which inherits from class brmsfit and behaves essentially the same as brmsfit object.
+                            data = ImpSSAP_new,
+                            prior = c(prior(normal(0, 20), class = "Intercept"),
+                                 # set for all "b" coefficients
+                                 prior(normal(0, 10), class = "b"),
+                                 prior(normal(0, 50), class = "sigma")),
+                                 # prior(student_t(4, 0, 1), class = "sigma")),
+                       seed = 29002,
+                       chains = 4L,
+                       cores = 4,
+                       file = "imp_mel_SSAP_data"
+)
+
+
+### Check if each model converged: Look at rhat for all models
+m1_SSAP_imp$rhats
+
+### Pool results together
+pooled_SSAP <- combine_models(m1_SSAP_imp)
+
+### Check poolded model
+summary(pooled_SSAP)
+
+### Compare results with model that remove all missing values
+m1_SSAP_reg <- brm(Values ~ Condition * Post + (1 + Condition | ID),
+                  data = SSAP_pivot,
+                  prior = c(prior(normal(0, 1), class = "Intercept"),
+                                 # set for all "b" coefficients
+                                 prior(normal(0, 1), class = "b"),
+                                 prior(student_t(4, 0, 1), class = "sigma")))
+
+m1_SSAP_reg <- brm(Values ~ 1 + Condition + Post + Condition:Post + (1 + Condition + Post|ID) + (1 | Interval), # might need to specify combine = TRUE so that the brmsfit_multiple object, which inherits from class brmsfit and behaves essentially the same as brmsfit object.
+                            data = SSAP_pivot,
+                            prior = c(prior(normal(0, 20), class = "Intercept"),
+                                 # set for all "b" coefficients
+                                 prior(normal(0, 10), class = "b"),
+                                 prior(normal(0, 50), class = "sigma")),
+                                 # prior(student_t(4, 0, 1), class = "sigma")),
+                       seed = 29002,
+                       chains = 4L,
+                       cores = 4,
+                    file = "SSAP_data_reg")
+
+summary(m1_SSAP_reg)
+
+```
+
+
+```{r}
+## Summary table for MI
+### Create data frame with needed values 
+dfmi <- data.frame(Pop_Level_Effects = c("Intercept", "Condition1", "Condition2", "Condition3", "Post", 
+                                         "Condition1:Post", "Condition2:Post", "Condition3:Post"),
+           estimate = c(16.64, -8.61, -3.30, -1.53, 2.62, 0.56, -6.43, -3.96),
+           est_error = c(9.57, 5.39, 5.19, 5.25, 4.50, 6.09, 5.78, 6.20),
+           l_95_CI = c(-3.20, -18.93, -13.48, -11.84, -6.40, -11.65, -17.63, -15.90),
+           u_95_CI = c(34.62, 2.25, 6.94, 8.81, 11.32, 12.33, 4.95, 8.38),
+           PSRF = c(1.00, 1.04, 1.01, 1.08, 1.01, 1.05, 1.00, 1.08))
+           
+          
+
+### Create table
+dfmi %>% 
+  kableExtra::kbl(caption = "Summary table Bayesian analysis after pooled results") %>% 
+  kableExtra::kable_classic(full_width = F, html_font = "Time") %>% 
+  kableExtra::save_kable("dfsaved.png") 
+```
+
+
+```{r}
+posterior_imp <- as.matrix(m1_SSAP_imp)
+
+mcmc_areas(posterior_imp,
+           pars = c(
+             "b_Intercept", "b_Condition1","b_Condition2", "b_Condition3", "b_Post1"), 
+                    # "b_Condition1:Post1","b_Condition2:Post1","b_Condition3:Post1"),
+           point_est = c("mean"),
+           prob = 0.95) +
+  labs(title = "Posterior distributions with means and 95% credibility intervals for melody imitation \
+  imputed dataset",
+         x = "Deviation (in cents)",
+         y = "Variables") +
+   theme(text=element_text(size = 10)) 
+ggsave("mcmc_post_nel.png")
+```
+
+
+#### Build tables from results
+```{r}
+### Summary table for MI
+### Create data frame with needed values 
+df <- data.frame(Pop_Level_Efct = c("Intercept", "ConditionRCereblm", "ConditionSham", "ConditionVisual               ", "PostPRE", "ConditionRCereblm:PostPRE", "ConditionSham:PostPRE", "ConditionVisual:PostPRE"),
+           est = c(0.22, -0.06, 0.21, 0.07, 0.03, 0.15, -0.00, 0.19),
+           est_error = c(1.19, 0.98, 1.00, 0.99, 0.97, 0.97, 0.98, 1.00),
+           l_95_CI = c(-2.10, -1.96, -1.71, -1.86, -1.86, -1.73, -1.95, -1.75),
+           u_95_CI = c(2.52, 1.88, 2.15, 2.01, 1.95, 2.07, 1.92, 2.18),
+           PSRF = c(1.00, 1.00, 1.00, 1.00, 1.01, 1.00, 1.00, 1.01))
+           
+          
+
+### Create table
+df %>% 
+  kableExtra::kbl(caption = "Summary table Bayesian analysis after pooled results") %>% 
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria") %>% 
+  kableExtra::save_kable("dfsaved.png") 
+
+
+
+### Summary table for complete data after removing missing
+df2 <- data.frame(Pop_Level_Efct = c("Intercept", "ConditionRCereblm", "ConditionSham", "ConditionVisual               ", "PostPRE", "ConditionRCereblm:PostPRE", "ConditionSham:PostPRE", "ConditionVisual:PostPRE"),
+           est = c(0.20, 0.04, 0.26, 0.08, -0.04, 0.14, -0.00, 0.12),
+           est_error = c(1.21, 0.97, 1.00, 1.00, 0.96, 0.98, 0.99, 1.02),
+           l_95_CI = c(-2.20, -1.89, -1.67, -1.80, -1.88, -1.78, -1.94, -1.87),
+           u_95_CI = c(2.53, 1.97, 2.21, 2.05, 1.83, 2.00, 1.87, 2.10),
+           PSRF = c(1.00, 1.00, 1.01, 1.00, 1.00, 1.00, 1.00, 1.00))
+
+
+### Create table
+df2 %>% 
+  kableExtra::kbl(caption = "Summary table Bayesian analysis after listwise deletion") %>% 
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria") %>% 
+  kableExtra::save_kable("df2saved.png")
+
+summary(m1_SSAP_reg)
+```
+
+
+```{r}
+sessionInfo()
+```
+
